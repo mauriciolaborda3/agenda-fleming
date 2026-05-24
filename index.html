@@ -17,6 +17,12 @@ body{font-family:Arial,sans-serif;background:#F4F6FB;color:#1A1A2E;min-height:10
 .logo{width:50px;height:50px;border-radius:50%;border:2px solid #E8943A;background:#E8943A;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;}
 .hdr h1{color:#fff;font-family:Nunito,sans-serif;font-size:18px;font-weight:900;}
 .hdr p{color:#E8943A;font-size:12px;margin-top:2px;}
+.admin-bar{background:#1a1a6e;color:#fff;display:flex;justify-content:space-between;align-items:center;padding:6px 14px;font-size:12px;}
+.admin-bar.hidden{display:none;}
+.admin-btn{background:#E8943A;color:#fff;border:none;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;}
+.sync-bar{background:#2ECC9A;color:#fff;text-align:center;font-size:11px;padding:4px;display:none;}
+.sync-bar.show{display:block;}
+.sync-bar.err{background:#E74C3C;}
 .ctabs{display:flex;gap:8px;padding:0 14px;margin-top:-20px;position:relative;z-index:10;margin-bottom:12px;}
 .ct{flex:1;background:#fff;border:2px solid #E4E8F0;border-radius:14px;padding:9px 4px;text-align:center;cursor:pointer;}
 .ctn{font-family:Nunito,sans-serif;font-size:13px;font-weight:800;display:block;}
@@ -77,6 +83,9 @@ label{font-size:11px;font-weight:700;color:#7A8499;display:block;margin-bottom:3
 .pa{background:#FEF6E6;color:#B87200;}
 .empty{text-align:center;padding:32px 16px;color:#7A8499;font-size:14px;}
 .emico{font-size:40px;display:block;margin-bottom:8px;}
+.loading{text-align:center;padding:40px;color:#7A8499;}
+.readonly-banner{background:#FEF6E6;border:1.5px solid #F5A623;border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#B87200;display:flex;justify-content:space-between;align-items:center;}
+.lock-btn{background:#1a1a6e;color:#fff;border:none;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer;}
 </style>
 </head>
 <body>
@@ -86,6 +95,11 @@ label{font-size:11px;font-weight:700;color:#7A8499;display:block;margin-bottom:3
     <div><h1>Agenda Fleming</h1><p>Colegio Alexander Fleming</p></div>
   </div>
 </div>
+<div class="admin-bar hidden" id="adminbar">
+  <span>&#128274; Modo administrador activo</span>
+  <button class="admin-btn" onclick="cerrarAdmin()">Cerrar sesion</button>
+</div>
+<div class="sync-bar" id="syncbar">Sincronizando...</div>
 <div class="ctabs">
   <div class="ct" id="tab0" onclick="setChild(0)"><span class="ctn">Amanda</span><span class="ctg">2A Basico</span></div>
   <div class="ct" id="tab1" onclick="setChild(1)"><span class="ctn">Rafaella</span><span class="ctg">4A Basico</span></div>
@@ -98,9 +112,26 @@ label{font-size:11px;font-weight:700;color:#7A8499;display:block;margin-bottom:3
   <button class="nb" id="nb3" onclick="setTab(3)"><span class="ni">&#128221;</span>Pruebas</button>
   <button class="nb" id="nb4" onclick="setTab(4)"><span class="ni">&#11088;</span>Extra</button>
 </div>
-<div class="con" id="main"></div>
+<div class="con" id="main"><div class="loading">Cargando...</div></div>
 
-<script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCqAPhK98uJ0lrjhidXdrY4cw9ji7uqpvU",
+  authDomain: "agenda-fleming.firebaseapp.com",
+  projectId: "agenda-fleming",
+  storageBucket: "agenda-fleming.firebasestorage.app",
+  messagingSenderId: "307109273561",
+  appId: "1:307109273561:web:ddfe4ee4ce133e8ea7c3c8"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const DOC = doc(db, "agenda", "familia");
+
+const PASS = "leon1403";
 var DOTS=["#4A90D9","#2ECC9A","#F5A623","#E74C3C","#8E44AD","#1ABC9C","#E67E22","#2C3E50","#16A085","#D35400","#7F8C8D"];
 var DIAS=["lunes","martes","miercoles","jueves","viernes"];
 var DLab=["Lunes","Martes","Miercoles","Jueves","Viernes"];
@@ -121,40 +152,96 @@ function defState(){
     {name:"Leon",grade:"5A",correo:"leon.laborda@colegiofleming.cl",mats:mkMats(2),pruebas:[],hor:mkHor(),extra:[]}
   ]};
 }
-function loadS(){try{var s=localStorage.getItem("flem6");if(s){var p=JSON.parse(s);if(p&&p.ch&&p.ch.length===3)return p;}}catch(e){}return defState();}
-function saveS(){try{localStorage.setItem("flem6",JSON.stringify(ST));}catch(e){}}
 
-var ST=loadS();
-var EM=-1;
+var ST = defState();
+var EM = -1;
+var saving = false;
+var isAdmin = false;
+
 function curC(){return ST.ch[ST.ci];}
 
-function setChild(i){
-  ST.ci=i;saveS();
+function showSync(msg,err){
+  var b=document.getElementById("syncbar");
+  if(b){b.textContent=msg;b.className="sync-bar show"+(err?" err":"");}
+}
+function hideSync(){var b=document.getElementById("syncbar");if(b)b.className="sync-bar";}
+
+async function saveToCloud(){
+  if(!isAdmin){alert("Necesitas ser administrador para hacer cambios.");return false;}
+  if(saving)return false;
+  saving=true;showSync("Guardando...");
+  try{
+    await setDoc(DOC, ST);
+    showSync("Guardado");setTimeout(hideSync,2000);
+  }catch(e){showSync("Error: "+e.message,true);setTimeout(hideSync,3000);}
+  saving=false;return true;
+}
+
+async function loadFromCloud(){
+  showSync("Cargando...");
+  try{
+    var snap=await getDoc(DOC);
+    if(snap.exists()){var data=snap.data();if(data&&data.ch&&data.ch.length===3)ST=data;}
+    hideSync();
+  }catch(e){hideSync();}
+  setChild(ST.ci||0);setTab(ST.ti||0);
+}
+
+onSnapshot(DOC,function(snap){
+  if(snap.exists()&&!saving){
+    var data=snap.data();
+    if(data&&data.ch&&data.ch.length===3){ST=data;renderMain();}
+  }
+});
+
+window.abrirAdmin=function(){
+  var p=prompt("Ingresa la contrasena de administrador:");
+  if(p===PASS){
+    isAdmin=true;
+    document.getElementById("adminbar").className="admin-bar";
+    renderMain();
+    alert("Bienvenido administrador!");
+  } else {
+    alert("Contrasena incorrecta.");
+  }
+}
+
+window.cerrarAdmin=function(){
+  isAdmin=false;
+  document.getElementById("adminbar").className="admin-bar hidden";
+  renderMain();
+}
+
+window.setChild=function(i){
+  ST.ci=i;
   var cls=[["#EBF4FF","#4A90D9","#1E5FA8"],["#E6FAF4","#2ECC9A","#0F8C68"],["#FEF6E6","#F5A623","#B87200"]];
   for(var x=0;x<3;x++){
-    var t=document.getElementById("tab"+x);
-    if(!t)continue;
+    var t=document.getElementById("tab"+x);if(!t)continue;
     if(x===i){t.style.background=cls[i][0];t.style.borderColor=cls[i][1];t.querySelector(".ctn").style.color=cls[i][2];}
     else{t.style.background="#fff";t.style.borderColor="#E4E8F0";t.querySelector(".ctn").style.color="#1A1A2E";}
   }
   renderMain();
 }
 
-function setTab(i){
-  ST.ti=i;saveS();
+window.setTab=function(i){
+  ST.ti=i;
   for(var x=0;x<5;x++){var b=document.getElementById("nb"+x);if(b)b.className="nb"+(x===i?" act":"");}
   renderMain();
 }
 
 function renderMain(){
-  var el=document.getElementById("main");
-  if(!el)return;
+  var el=document.getElementById("main");if(!el)return;
   var t=ST.ti;
   if(t===0)el.innerHTML=rHome();
   else if(t===1)el.innerHTML=rMats();
   else if(t===2)el.innerHTML=rHor();
   else if(t===3)el.innerHTML=rPruebas();
   else el.innerHTML=rExtra();
+}
+
+function readonlyBanner(){
+  if(isAdmin)return "";
+  return '<div class="readonly-banner">Solo lectura &mdash; <span style="flex:1;margin:0 8px">Ingresa como admin para editar</span><button class="lock-btn" onclick="abrirAdmin()">&#128274; Admin</button></div>';
 }
 
 function fmt(f){try{return new Date(f+"T00:00:00").toLocaleDateString("es-CL",{day:"numeric",month:"short",weekday:"short"});}catch(e){return f;}}
@@ -169,7 +256,7 @@ function rHome(){
     }
   }
   al.sort(function(a,b){return new Date(a.f)-new Date(b.f);});
-  var h="";
+  var h=readonlyBanner();
   if(al.length){h+='<div class="ab"><h3>Proximos 7 dias</h3>';for(var i=0;i<al.length;i++)h+='<div class="ai"><span><b>'+al[i].cn+'</b> - '+al[i].mat+': '+al[i].t+'</span><span>'+fmt(al[i].f)+'</span></div>';h+='</div>';}
   for(var i=0;i<ST.ch.length;i++){
     var c=ST.ch[i];var col=CC[i];
@@ -182,7 +269,7 @@ function rHome(){
     h+='<div style="flex:1"><div style="font-size:16px;font-weight:900;font-family:Nunito,sans-serif">'+c.name+'</div>';
     h+='<div style="font-size:12px;color:#7A8499">'+c.mats.length+' materias - '+c.extra.length+' extra</div>'+cor+'</div></div>';
     h+='<div class="sr"><span class="sl">Proxima prueba</span><span class="sv" style="color:'+col+'">'+(prx?prx.m+" "+fmt(prx.f):"Sin pruebas")+'</span></div>';
-    h+='<div class="sr"><span class="sl">Pruebas registradas</span><span class="sv">'+c.pruebas.length+'</span></div>';
+    h+='<div class="sr"><span class="sl">Pruebas</span><span class="sv">'+c.pruebas.length+'</span></div>';
     h+='<div class="sr"><span class="sl">Extraescolares</span><span class="sv">'+c.extra.length+'</span></div></div>';
   }
   return h;
@@ -190,54 +277,56 @@ function rHome(){
 
 function rMats(){
   var c=curC();var rows="";
-  for(var i=0;i<c.mats.length;i++){var m=c.mats[i];rows+='<div class="mr"><div class="dot" style="background:'+DOTS[i%11]+'"></div><div style="flex:1"><div class="mn">'+m.n+'</div><div class="ms">S1: <b>'+(m.s1||"sin contenido")+'</b> - S2: <b>'+(m.s2||"sin contenido")+'</b></div><button class="bs" style="margin-top:6px" onclick="editM('+i+')">Editar</button></div></div>';}
-  return '<div class="sh"><h2>'+c.name+'</h2><button class="bs" onclick="showAM()">+ Nueva</button></div>'
-    +'<div class="card" id="amf" style="display:none"><div class="ct2">Nueva materia</div>'
-    +'<label>Nombre</label><input type="text" id="nm-n" placeholder="Ej: Ciencias Literarias">'
-    +'<label>Semestre 1</label><input type="text" id="nm-s1" placeholder="Contenidos sem 1">'
-    +'<label>Semestre 2</label><input type="text" id="nm-s2" placeholder="Contenidos sem 2">'
-    +'<button class="btn bp" onclick="saveNM()">Guardar</button></div>'
-    +'<div class="card" id="emf" style="display:none"><div class="ct2">Editar contenidos</div>'
-    +'<label>Semestre 1</label><input type="text" id="em-s1">'
-    +'<label>Semestre 2</label><input type="text" id="em-s2">'
-    +'<div class="fr" style="margin-top:4px"><button class="btn bp" onclick="saveEM()">Guardar</button>'
-    +'<button class="btn" style="background:#F0F2F7" onclick="cancelE()">Cancelar</button></div></div>'
-    +'<div class="card">'+rows+'</div>';
+  for(var i=0;i<c.mats.length;i++){
+    var m=c.mats[i];
+    rows+='<div class="mr"><div class="dot" style="background:'+DOTS[i%11]+'"></div><div style="flex:1"><div class="mn">'+m.n+'</div><div class="ms">S1: <b>'+(m.s1||"sin contenido")+'</b> - S2: <b>'+(m.s2||"sin contenido")+'</b></div>';
+    if(isAdmin)rows+='<button class="bs" style="margin-top:6px" onclick="editM('+i+')">Editar</button>';
+    rows+='</div></div>';
+  }
+  var h='<div class="sh"><h2>'+c.name+'</h2>'+(isAdmin?'<button class="bs" onclick="showAM()">+ Nueva</button>':'')+'</div>'+readonlyBanner();
+  if(isAdmin)h+='<div class="card" id="amf" style="display:none"><div class="ct2">Nueva materia</div><label>Nombre</label><input type="text" id="nm-n" placeholder="Ej: Ciencias Literarias"><label>Semestre 1</label><input type="text" id="nm-s1" placeholder="Contenidos sem 1"><label>Semestre 2</label><input type="text" id="nm-s2" placeholder="Contenidos sem 2"><button class="btn bp" onclick="saveNM()">Guardar</button></div><div class="card" id="emf" style="display:none"><div class="ct2">Editar contenidos</div><label>Semestre 1</label><input type="text" id="em-s1"><label>Semestre 2</label><input type="text" id="em-s2"><div class="fr" style="margin-top:4px"><button class="btn bp" onclick="saveEM()">Guardar</button><button class="btn" style="background:#F0F2F7" onclick="cancelE()">Cancelar</button></div></div>';
+  h+='<div class="card">'+rows+'</div>';
+  return h;
 }
-function showAM(){var f=document.getElementById("amf");if(f)f.style.display=f.style.display==="none"?"block":"none";}
-function saveNM(){var n=document.getElementById("nm-n");if(!n||!n.value.trim()){alert("Escribe el nombre");return;}curC().mats.push({n:n.value.trim(),s1:document.getElementById("nm-s1").value,s2:document.getElementById("nm-s2").value});saveS();renderMain();}
-function editM(i){EM=i;var m=curC().mats[i];document.getElementById("emf").style.display="block";document.getElementById("em-s1").value=m.s1;document.getElementById("em-s2").value=m.s2;}
-function saveEM(){if(EM<0)return;curC().mats[EM].s1=document.getElementById("em-s1").value;curC().mats[EM].s2=document.getElementById("em-s2").value;EM=-1;saveS();renderMain();}
-function cancelE(){EM=-1;renderMain();}
+window.showAM=function(){var f=document.getElementById("amf");if(f)f.style.display=f.style.display==="none"?"block":"none";}
+window.saveNM=function(){if(!isAdmin)return;var n=document.getElementById("nm-n");if(!n||!n.value.trim()){alert("Escribe el nombre");return;}curC().mats.push({n:n.value.trim(),s1:document.getElementById("nm-s1").value,s2:document.getElementById("nm-s2").value});saveToCloud();renderMain();}
+window.editM=function(i){if(!isAdmin)return;EM=i;var m=curC().mats[i];document.getElementById("emf").style.display="block";document.getElementById("em-s1").value=m.s1;document.getElementById("em-s2").value=m.s2;}
+window.saveEM=function(){if(!isAdmin||EM<0)return;curC().mats[EM].s1=document.getElementById("em-s1").value;curC().mats[EM].s2=document.getElementById("em-s2").value;EM=-1;saveToCloud();renderMain();}
+window.cancelE=function(){EM=-1;renderMain();}
 
 function rHor(){
   var c=curC();if(!ST.of)ST.of={};
   var mo="";for(var i=0;i<c.mats.length;i++)mo+="<option>"+c.mats[i].n+"</option>";
   mo+="<option>Recreo</option><option>Almuerzo</option><option>Lectura</option><option>Tareas</option>";
-  var h='<div class="sh"><h2>Horario - '+c.name+'</h2></div><div class="card">';
+  var h='<div class="sh"><h2>Horario - '+c.name+'</h2></div>'+readonlyBanner()+'<div class="card">';
   for(var di=0;di<DIAS.length;di++){
     var d=DIAS[di];var bls=c.hor[d]||[];var bl="";
-    for(var bi=0;bi<bls.length;bi++){var b=bls[bi];bl+='<div class="blq"><span class="bh">'+b.h+'</span><div style="flex:1"><span class="bm">'+b.m+'</span><br><span class="bdur">'+b.d+' min</span></div><button class="bd" onclick="delBl(\''+d+'\','+bi+')">X</button></div>';}
+    for(var bi=0;bi<bls.length;bi++){
+      var b=bls[bi];
+      bl+='<div class="blq"><span class="bh">'+b.h+'</span><div style="flex:1"><span class="bm">'+b.m+'</span><br><span class="bdur">'+b.d+' min</span></div>';
+      if(isAdmin)bl+='<button class="bd" onclick="delBl(\''+d+'\','+bi+')">X</button>';
+      bl+='</div>';
+    }
     var fid="hf-"+d;var io=ST.of[fid];
-    h+='<div class="ds"><div class="dn">'+DLab[di]+'<button class="bs" onclick="togHF(\''+fid+'\')">'+(io?"Cerrar":"Agregar")+'</button></div>';
+    h+='<div class="ds"><div class="dn">'+DLab[di];
+    if(isAdmin)h+='<button class="bs" onclick="togHF(\''+fid+'\')">'+(io?"Cerrar":"Agregar")+'</button>';
+    h+='</div>';
     h+=bl||'<div style="font-size:12px;color:#7A8499;padding:4px 0">Sin bloques</div>';
-    h+='<div class="af'+(io?" op":"")+'" id="'+fid+'">';
-    h+='<label>Materia</label><select id="sm-'+d+'">'+mo+'</select>';
-    h+='<div class="fr"><div><label>Hora</label><input type="time" id="sh-'+d+'" value="08:00"></div>';
-    h+='<div><label>Minutos</label><input type="number" id="sd-'+d+'" value="45" min="5" max="180"></div></div>';
-    h+='<button class="btn bp" onclick="saveBl(\''+d+'\')">Guardar</button></div></div>';
+    if(isAdmin)h+='<div class="af'+(io?" op":"")+'" id="'+fid+'"><label>Materia</label><select id="sm-'+d+'">'+mo+'</select><div class="fr"><div><label>Hora</label><input type="time" id="sh-'+d+'" value="08:00"></div><div><label>Minutos</label><input type="number" id="sd-'+d+'" value="45" min="5" max="180"></div></div><button class="btn bp" onclick="saveBl(\''+d+'\')">Guardar</button></div>';
+    h+='</div>';
   }
   h+='</div>';return h;
 }
-function togHF(fid){if(!ST.of)ST.of={};ST.of[fid]=!ST.of[fid];renderMain();}
-function saveBl(d){
+window.togHF=function(fid){if(!isAdmin)return;if(!ST.of)ST.of={};ST.of[fid]=!ST.of[fid];renderMain();}
+window.saveBl=function(d){
+  if(!isAdmin)return;
   var mat=document.getElementById("sm-"+d);var hora=document.getElementById("sh-"+d);var dur=document.getElementById("sd-"+d);
   if(!mat||!hora||!mat.value||!hora.value){alert("Completa los datos");return;}
   var c=curC();if(!c.hor[d])c.hor[d]=[];
   c.hor[d].push({h:hora.value,d:parseInt(dur?dur.value:45)||45,m:mat.value});
-  ST.of["hf-"+d]=false;saveS();renderMain();
+  ST.of["hf-"+d]=false;saveToCloud();renderMain();
 }
-function delBl(d,bi){curC().hor[d].splice(bi,1);saveS();renderMain();}
+window.delBl=function(d,bi){if(!isAdmin)return;curC().hor[d].splice(bi,1);saveToCloud();renderMain();}
 
 function rPruebas(){
   var c=curC();var hoy=new Date();
@@ -245,71 +334,56 @@ function rPruebas(){
   var px=[],pa=[];
   for(var i=0;i<sorted.length;i++){if(new Date(sorted[i].f+"T00:00:00")>=hoy)px.push(sorted[i]);else pa.push(sorted[i]);}
   var mo="";for(var i=0;i<c.mats.length;i++)mo+="<option>"+c.mats[i].n+"</option>";
-  var h='<div class="sh"><h2>Pruebas - '+c.name+'</h2></div>'
-    +'<div class="card"><div class="ct2">Nueva prueba</div>'
-    +'<label>Materia</label><select id="np-mat">'+mo+'</select>'
-    +'<label>Fecha</label><input type="date" id="np-f">'
-    +'<label>Nombre</label><input type="text" id="np-t" placeholder="Ej: Prueba de multiplicacion">'
-    +'<label>Que estudiar</label><input type="text" id="np-c" placeholder="Ej: Tablas del 6 al 9">'
-    +'<button class="btn bp" onclick="addP()">Agregar prueba</button></div>';
+  var h='<div class="sh"><h2>Pruebas - '+c.name+'</h2></div>'+readonlyBanner();
+  if(isAdmin)h+='<div class="card"><div class="ct2">Nueva prueba</div><label>Materia</label><select id="np-mat">'+mo+'</select><label>Fecha</label><input type="date" id="np-f"><label>Nombre</label><input type="text" id="np-t" placeholder="Ej: Prueba de multiplicacion"><label>Que estudiar</label><input type="text" id="np-c" placeholder="Ej: Tablas del 6 al 9"><button class="btn bp" onclick="addP()">Agregar prueba</button></div>';
   function card(p){
     var d=new Date(p.f+"T00:00:00");var ds=Math.ceil((d-hoy)/86400000);
     var ug=ds>=0&&ds<=1,pr=ds>=0&&ds<=5;
     var badge=ug?'<span class="pill pr">'+(ds===0?"Hoy":"Manana")+"</span>":pr?'<span class="pill pa">'+ds+" dias</span>":"";
     var idx=c.pruebas.indexOf(p);
-    return '<div class="pc'+(ug?" urg":pr?" soon":"")+'"><div style="flex:1">'
-      +'<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px"><span class="pill pn">'+p.m+"</span>"+badge+'</div>'
-      +'<div class="pt">'+p.t+'</div><div class="ps">'+fmt(p.f)+(p.c?" - "+p.c:"")+"</div></div>"
-      +'<button class="bd" onclick="delP('+idx+')">Borrar</button></div>';
+    return '<div class="pc'+(ug?" urg":pr?" soon":"")+'"><div style="flex:1"><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px"><span class="pill pn">'+p.m+"</span>"+badge+'</div><div class="pt">'+p.t+'</div><div class="ps">'+fmt(p.f)+(p.c?" - "+p.c:"")+"</div></div>"+(isAdmin?'<button class="bd" onclick="delP('+idx+')">Borrar</button>':"")+'</div>';
   }
   if(px.length){h+='<div class="ct2" style="margin:12px 0 8px">Proximas ('+px.length+")</div>";for(var i=0;i<px.length;i++)h+=card(px[i]);}
   if(pa.length){h+='<div class="ct2" style="margin:12px 0 8px;color:#7A8499">Pasadas</div>';for(var i=0;i<pa.length;i++)h+=card(pa[i]);}
   if(!px.length&&!pa.length)h+='<div class="empty"><span class="emico">&#128197;</span>Sin pruebas registradas</div>';
   return h;
 }
-function addP(){
+window.addP=function(){
+  if(!isAdmin)return;
   var mat=document.getElementById("np-mat");var f=document.getElementById("np-f");
   var t=document.getElementById("np-t");var c=document.getElementById("np-c");
   if(!f||!f.value){alert("Selecciona la fecha");return;}
-  if(!t||!t.value.trim()){alert("Escribe el nombre de la prueba");return;}
+  if(!t||!t.value.trim()){alert("Escribe el nombre");return;}
   curC().pruebas.push({m:mat?mat.value:"",f:f.value,t:t.value.trim(),c:c?c.value.trim():""});
-  saveS();renderMain();
+  saveToCloud();renderMain();
 }
-function delP(i){if(!confirm("Eliminar esta prueba?"))return;curC().pruebas.splice(i,1);saveS();renderMain();}
+window.delP=function(i){if(!isAdmin)return;if(!confirm("Eliminar?"))return;curC().pruebas.splice(i,1);saveToCloud();renderMain();}
 
 function rExtra(){
   var c=curC();
   var to="";for(var k in TIPOS)to+="<option>"+k+"</option>";
   var dop="";for(var i=0;i<DLab.length;i++)dop+="<option>"+DLab[i]+"</option>";
-  var h='<div class="sh"><h2>Extraescolares - '+c.name+'</h2></div>'
-    +'<div class="card"><div class="ct2">Nueva actividad</div>'
-    +'<label>Tipo</label><select id="ex-t">'+to+"</select>"
-    +'<label>Nombre</label><input type="text" id="ex-n" placeholder="Ej: Futbol Fleming">'
-    +'<div class="fr"><div><label>Dia</label><select id="ex-d">'+dop+"</select></div>"
-    +'<div><label>Hora</label><input type="time" id="ex-h" value="16:00"></div></div>'
-    +'<label>Lugar (opcional)</label><input type="text" id="ex-l" placeholder="Ej: Gimnasio">'
-    +'<label>Profesor (opcional)</label><input type="text" id="ex-p" placeholder="Ej: Profe Martinez">'
-    +'<button class="btn bg2" onclick="addEx()">Agregar actividad</button></div>';
+  var h='<div class="sh"><h2>Extraescolares - '+c.name+'</h2></div>'+readonlyBanner();
+  if(isAdmin)h+='<div class="card"><div class="ct2">Nueva actividad</div><label>Tipo</label><select id="ex-t">'+to+'</select><label>Nombre</label><input type="text" id="ex-n" placeholder="Ej: Futbol Fleming"><div class="fr"><div><label>Dia</label><select id="ex-d">'+dop+'</select></div><div><label>Hora</label><input type="time" id="ex-h" value="16:00"></div></div><label>Lugar (opcional)</label><input type="text" id="ex-l" placeholder="Ej: Gimnasio"><label>Profesor (opcional)</label><input type="text" id="ex-p" placeholder="Ej: Profe Martinez"><button class="btn bg2" onclick="addEx()">Agregar actividad</button></div>';
   if(c.extra.length===0)return h+'<div class="empty"><span class="emico">&#11088;</span>Sin actividades</div>';
   for(var i=0;i<c.extra.length;i++){
     var e=c.extra[i];var ico=TIPOS[e.tipo]||"&#11088;";
-    h+='<div class="exc"><div class="eic">'+ico+'</div><div style="flex:1"><div class="en">'+e.n+'</div>'
-      +'<div class="es">'+e.dia+" "+e.hora+(e.lugar?" - "+e.lugar:"")+(e.prof?" - Prof. "+e.prof:"")+'</div></div>'
-      +'<button class="bd" onclick="delEx('+i+')">Borrar</button></div>';
+    h+='<div class="exc"><div class="eic">'+ico+'</div><div style="flex:1"><div class="en">'+e.n+'</div><div class="es">'+e.dia+" "+e.hora+(e.lugar?" - "+e.lugar:"")+(e.prof?" - Prof. "+e.prof:"")+'</div></div>'+(isAdmin?'<button class="bd" onclick="delEx('+i+')">Borrar</button>':"")+'</div>';
   }
   return h;
 }
-function addEx(){
+window.addEx=function(){
+  if(!isAdmin)return;
   var tp=document.getElementById("ex-t");var n=document.getElementById("ex-n");
   var d=document.getElementById("ex-d");var h=document.getElementById("ex-h");
   var l=document.getElementById("ex-l");var p=document.getElementById("ex-p");
   if(!n||!n.value.trim()){alert("Escribe el nombre");return;}
   curC().extra.push({tipo:tp?tp.value:"Otro",n:n.value.trim(),dia:d?d.value:"Lunes",hora:h?h.value:"16:00",lugar:l?l.value.trim():"",prof:p?p.value.trim():""});
-  saveS();renderMain();
+  saveToCloud();renderMain();
 }
-function delEx(i){if(!confirm("Eliminar?"))return;curC().extra.splice(i,1);saveS();renderMain();}
+window.delEx=function(i){if(!isAdmin)return;if(!confirm("Eliminar?"))return;curC().extra.splice(i,1);saveToCloud();renderMain();}
 
-window.onload=function(){setChild(ST.ci||0);setTab(ST.ti||0);};
+loadFromCloud();
 </script>
 </body>
 </html>
